@@ -1,6 +1,6 @@
 # NotEnoughFakeQQBot
 
-Android 客户端，配合 [not-enough-fakeqqbot](https://github.com/ArilyChan/koishi-plugin-not-enough-fakeqqbot) Koishi 插件使用，提供类似 QQ 的聊天体验。
+Android 客户端，配合 [not-enough-fakeqqbot](https://www.npmjs.com/package/koishi-plugin-not-enough-fakeqqbot) Koishi 插件使用，提供类似 QQ 的聊天体验。
 
 ## 功能
 
