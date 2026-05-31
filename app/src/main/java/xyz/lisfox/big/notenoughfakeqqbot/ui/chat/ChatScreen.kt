@@ -18,8 +18,10 @@ import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -31,15 +33,18 @@ import androidx.compose.material.icons.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SaveAlt
+import androidx.compose.material.icons.filled.Undo
 import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.BookmarkAdd
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.FormatQuote
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -50,12 +55,17 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
@@ -67,8 +77,13 @@ import coil.request.ImageRequest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.json.Json
 import xyz.lisfox.big.notenoughfakeqqbot.App
+import xyz.lisfox.big.notenoughfakeqqbot.data.model.KeyboardConfig
+import xyz.lisfox.big.notenoughfakeqqbot.data.model.KeyboardRow
 import xyz.lisfox.big.notenoughfakeqqbot.data.model.MessageEntity
+import xyz.lisfox.big.notenoughfakeqqbot.data.model.MessageButton
 import xyz.lisfox.big.notenoughfakeqqbot.data.websocket.WsConnectionState
 import xyz.lisfox.big.notenoughfakeqqbot.util.ContentSegment
 import xyz.lisfox.big.notenoughfakeqqbot.util.extractPlainText
@@ -98,8 +113,16 @@ fun ChatScreen(
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val density = LocalDensity.current
+    val imeVisible = WindowInsets.ime.getBottom(density) > 0
     var draft by remember { mutableStateOf("") }
     var fullscreenImageUrl by remember { mutableStateOf<String?>(null) }
+    var showMorePanel by remember { mutableStateOf(false) }
+    var openMorePanelAfterImeHidden by remember { mutableStateOf(false) }
+    var messageType by remember { mutableStateOf("text") }
+    var keyboardConfig by remember { mutableStateOf<KeyboardConfig?>(null) }
+    var showButtonDialog by remember { mutableStateOf(false) }
 
     // 快捷短语
     var showQuickPhrases by remember { mutableStateOf(false) }
@@ -123,6 +146,15 @@ fun ChatScreen(
 
     LaunchedEffect(platform, selfId, channelId) {
         viewModel.init(platform, selfId, channelId, chatType)
+    }
+
+    LaunchedEffect(imeVisible) {
+        if (imeVisible) {
+            showMorePanel = false
+        } else if (openMorePanelAfterImeHidden) {
+            openMorePanelAfterImeHidden = false
+            showMorePanel = true
+        }
     }
 
     // 进入聊天页自动标记已读
@@ -156,6 +188,19 @@ fun ChatScreen(
                 pendingImageUri = null
             },
             onDismiss = { pendingImageUri = null },
+        )
+    }
+
+    if (showButtonDialog) {
+        ButtonConfigDialog(
+            initial = keyboardConfig,
+            onDismiss = { showButtonDialog = false },
+            onSave = { config ->
+                keyboardConfig = config
+                messageType = "markdown"
+                showButtonDialog = false
+                showMorePanel = false
+            },
         )
     }
 
@@ -330,15 +375,57 @@ fun ChatScreen(
         bottomBar = {
             ChatInputBar(
                 draft = draft,
-                onDraftChange = { draft = it },
+                onDraftChange = {
+                    draft = it
+                    openMorePanelAfterImeHidden = false
+                    showMorePanel = false
+                },
                 onSend = {
                     if (draft.isNotBlank()) {
-                        viewModel.sendMessage(draft)
-                        draft = ""
+                        if (keyboardConfig != null && messageType != "markdown") {
+                            Toast.makeText(context, "仅 Markdown 消息支持按钮", Toast.LENGTH_SHORT).show()
+                        } else {
+                            viewModel.sendMessage(draft, messageType, keyboardConfig)
+                            draft = ""
+                            messageType = "text"
+                            keyboardConfig = null
+                            openMorePanelAfterImeHidden = false
+                            showMorePanel = false
+                        }
                     }
                 },
                 onPickImage = { imagePickerLauncher.launch("image/*") },
                 onQuickPhrase = { showQuickPhrases = true },
+                onMore = {
+                    if (showMorePanel) {
+                        openMorePanelAfterImeHidden = false
+                        showMorePanel = false
+                    } else {
+                        keyboardController?.hide()
+                        if (imeVisible) {
+                            openMorePanelAfterImeHidden = true
+                        } else {
+                            showMorePanel = true
+                        }
+                    }
+                },
+                messageType = messageType,
+                keyboardConfig = keyboardConfig,
+                showMorePanel = showMorePanel,
+                onClearMarkdown = {
+                    if (keyboardConfig == null) messageType = "text"
+                    else Toast.makeText(context, "按钮消息需要 Markdown", Toast.LENGTH_SHORT).show()
+                },
+                onClearButtons = { keyboardConfig = null },
+                onSelectMarkdown = {
+                    messageType = "markdown"
+                    openMorePanelAfterImeHidden = false
+                    showMorePanel = false
+                },
+                onConfigButtons = {
+                    keyboardController?.hide()
+                    showButtonDialog = true
+                },
                 sendingState = uiState.sendingState,
                 isUploading = uiState.uploadingImage,
             )
@@ -386,9 +473,12 @@ fun ChatScreen(
                                 Toast.makeText(context, "已保存为快捷短语", Toast.LENGTH_SHORT).show()
                             }
                         },
+                        onRecall = { message -> viewModel.recallMessage(message) },
+                        onPlusOne = { text -> viewModel.sendMessage(text, "text", null) },
                         onAtUser = if (chatType == "group") { userId, nickname ->
                             val atTag = "<qqbot-at-user id=\"$userId\" />"
                             draft = draft + atTag
+                            messageType = "markdown"
                         } else null,
                     )
                 }
@@ -489,11 +579,39 @@ private fun MessageBubble(
     onImageClick: (String) -> Unit,
     onCopyText: (String) -> Unit,
     onSavePhrase: (String) -> Unit,
+    onRecall: (MessageEntity) -> Unit,
+    onPlusOne: (String) -> Unit,
     onAtUser: ((userId: String, nickname: String?) -> Unit)? = null,
 ) {
     val segments = remember(message.content) { parseContentSegments(message.content) }
     val plainText = remember(message.content) { extractPlainText(message.content) }
+    val keyboardConfig = remember(message.keyboardJson) { parseKeyboardConfig(message.keyboardJson) }
+    val canPlusOne = remember(segments, message.messageType, message.keyboardJson, plainText) {
+        message.messageType != "markdown" &&
+                keyboardConfig == null &&
+                segments.size == 1 &&
+                segments.firstOrNull() is ContentSegment.Text &&
+                plainText.isNotBlank()
+    }
     var showMenu by remember { mutableStateOf(false) }
+    var showButtonDetails by remember { mutableStateOf(false) }
+
+    if (message.recalled) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 8.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = if (isSelf) "你撤回了一条消息" else "消息已撤回",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                fontSize = 11.sp,
+            )
+        }
+        return
+    }
 
     Row(
         modifier = Modifier
@@ -553,14 +671,7 @@ private fun MessageBubble(
                                 color = MaterialTheme.colorScheme.primary,
                             )
                         }
-                        Text(
-                            text = extractPlainText(message.quoteContent),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                            lineHeight = 16.sp,
-                        )
+                        QuoteContentPreview(content = message.quoteContent)
                     }
                 }
             }
@@ -593,62 +704,43 @@ private fun MessageBubble(
                                     lineHeight = 20.sp,
                                 )
                             }
-                            // 气泡上方弹出菜单
-                            DropdownMenu(
+                            MessageActionMenu(
                                 expanded = showMenu,
-                                onDismissRequest = { showMenu = false },
-                                containerColor = androidx.compose.ui.graphics.Color(0xFF2C2C2C),
-                                shape = RoundedCornerShape(12.dp),
-                            ) {
-                                DropdownMenuItem(
-                                    text = {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Icon(
-                                                Icons.Filled.ContentCopy,
-                                                contentDescription = null,
-                                                tint = androidx.compose.ui.graphics.Color.White,
-                                                modifier = Modifier.size(18.dp),
-                                            )
-                                            Spacer(modifier = Modifier.width(10.dp))
-                                            Text("复制", color = androidx.compose.ui.graphics.Color.White)
-                                        }
-                                    },
-                                    onClick = {
-                                        onCopyText(plainText)
-                                        showMenu = false
-                                    },
-                                )
-                                DropdownMenuItem(
-                                    text = {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Icon(
-                                                Icons.Filled.BookmarkAdd,
-                                                contentDescription = null,
-                                                tint = androidx.compose.ui.graphics.Color.White,
-                                                modifier = Modifier.size(18.dp),
-                                            )
-                                            Spacer(modifier = Modifier.width(10.dp))
-                                            Text("存为快捷短语", color = androidx.compose.ui.graphics.Color.White)
-                                        }
-                                    },
-                                    onClick = {
-                                        onSavePhrase(plainText)
-                                        showMenu = false
-                                    },
-                                )
-                            }
+                                canRecall = isSelf,
+                                canPlusOne = canPlusOne,
+                                onDismiss = { showMenu = false },
+                                onCopy = { onCopyText(plainText); showMenu = false },
+                                onPlusOne = { onPlusOne(plainText); showMenu = false },
+                                onSavePhrase = { onSavePhrase(plainText); showMenu = false },
+                                onRecall = { onRecall(message); showMenu = false },
+                            )
                         }
                         Spacer(modifier = Modifier.height(2.dp))
                     }
                     is ContentSegment.Image -> {
-                        CachedImage(
-                            url = segment.url,
-                            modifier = Modifier
-                                .widthIn(max = 200.dp)
-                                .heightIn(max = 260.dp)
-                                .clip(RoundedCornerShape(12.dp))
-                                .clickable { onImageClick(segment.url) },
-                        )
+                        Box {
+                            CachedImage(
+                                url = segment.url,
+                                modifier = Modifier
+                                    .widthIn(max = 200.dp)
+                                    .heightIn(max = 260.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .combinedClickable(
+                                        onClick = { onImageClick(segment.url) },
+                                        onLongClick = { showMenu = true },
+                                    ),
+                            )
+                            MessageActionMenu(
+                                expanded = showMenu,
+                                canRecall = isSelf,
+                                canPlusOne = false,
+                                onDismiss = { showMenu = false },
+                                onCopy = { onCopyText(plainText); showMenu = false },
+                                onPlusOne = {},
+                                onSavePhrase = { onSavePhrase(plainText); showMenu = false },
+                                onRecall = { onRecall(message); showMenu = false },
+                            )
+                        }
                         Spacer(modifier = Modifier.height(2.dp))
                     }
                     is ContentSegment.Audio -> {
@@ -681,6 +773,13 @@ private fun MessageBubble(
                     }
                 }
             }
+
+            MessageMetaBadges(
+                isMarkdown = message.messageType == "markdown",
+                keyboardConfig = keyboardConfig,
+                isSelf = isSelf,
+                onButtonsClick = { showButtonDetails = true },
+            )
         }
 
         if (isSelf) {
@@ -690,6 +789,275 @@ private fun MessageBubble(
                 botAvatar = botAvatar,
                 modifier = Modifier.size(36.dp),
             )
+        }
+    }
+
+    if (showButtonDetails && keyboardConfig != null) {
+        ButtonDetailsDialog(
+            keyboardConfig = keyboardConfig,
+            onDismiss = { showButtonDetails = false },
+        )
+    }
+}
+
+private fun parseKeyboardConfig(raw: String?): KeyboardConfig? {
+    if (raw.isNullOrBlank()) return null
+    return try {
+        Json { ignoreUnknownKeys = true; isLenient = true }.decodeFromString<KeyboardConfig>(raw)
+    } catch (_: Exception) {
+        null
+    }
+}
+
+@Composable
+private fun MessageMetaBadges(
+    isMarkdown: Boolean,
+    keyboardConfig: KeyboardConfig?,
+    isSelf: Boolean,
+    onButtonsClick: () -> Unit,
+) {
+    val buttonCount = keyboardConfig?.rows?.sumOf { it.buttons.size } ?: 0
+    if (!isMarkdown && buttonCount == 0) return
+
+    Row(
+        modifier = Modifier.padding(top = 2.dp, bottom = 2.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (isMarkdown) {
+            MessageMetaBadge(text = "MD", isSelf = isSelf)
+        }
+        if (buttonCount > 0) {
+            MessageMetaBadge(
+                text = "按钮 $buttonCount",
+                isSelf = isSelf,
+                onClick = onButtonsClick,
+            )
+        }
+    }
+}
+
+@Composable
+private fun MessageMetaBadge(
+    text: String,
+    isSelf: Boolean,
+    onClick: (() -> Unit)? = null,
+) {
+    Surface(
+        modifier = if (onClick != null) Modifier.clickable { onClick() } else Modifier,
+        shape = RoundedCornerShape(999.dp),
+        color = if (isSelf) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+        else MaterialTheme.colorScheme.surfaceContainerHighest,
+        border = androidx.compose.foundation.BorderStroke(
+            width = 0.6.dp,
+            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f),
+        ),
+    ) {
+        Text(
+            text = text,
+            modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+            style = MaterialTheme.typography.labelSmall,
+            fontSize = 10.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun ButtonDetailsDialog(
+    keyboardConfig: KeyboardConfig,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("按钮详情") },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 420.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                keyboardConfig.rows.forEachIndexed { rowIndex, row ->
+                    Text(
+                        text = "第 ${rowIndex + 1} 行",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    row.buttons.forEach { button ->
+                        ButtonDetailItem(button = button)
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("关闭") } },
+    )
+}
+
+@Composable
+private fun ButtonDetailItem(button: MessageButton) {
+    val typeLabel = when (button.action) {
+        "link" -> "链接"
+        "command" -> "指令"
+        else -> "回调"
+    }
+    val value = when (button.action) {
+        "link" -> button.url
+        "command" -> button.command
+        else -> button.data
+    }.orEmpty()
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .padding(horizontal = 12.dp, vertical = 9.dp),
+        verticalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = button.label,
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (button.primary) {
+                MessageMetaBadge(text = "主按钮", isSelf = false)
+            }
+        }
+        Text(
+            text = typeLabel,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.primary,
+        )
+        if (value.isNotBlank()) {
+            Text(
+                text = value,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun MessageActionMenu(
+    expanded: Boolean,
+    canRecall: Boolean,
+    canPlusOne: Boolean,
+    onDismiss: () -> Unit,
+    onCopy: () -> Unit,
+    onPlusOne: () -> Unit,
+    onSavePhrase: () -> Unit,
+    onRecall: () -> Unit,
+) {
+    if (!expanded) return
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    Popup(
+        alignment = Alignment.TopCenter,
+        offset = with(density) { IntOffset(0, -76.dp.roundToPx()) },
+        onDismissRequest = onDismiss,
+        properties = PopupProperties(focusable = true),
+    ) {
+        Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = androidx.compose.ui.graphics.Color(0xE6333333),
+            shadowElevation = 10.dp,
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 7.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                MessageActionButton(Icons.Filled.ContentCopy, "复制", onCopy)
+                if (canPlusOne) {
+                    MessageActionButton(Icons.Filled.Add, "+1", onPlusOne)
+                }
+                MessageActionButton(Icons.Filled.BookmarkAdd, "短语", onSavePhrase)
+                if (canRecall) {
+                    MessageActionButton(Icons.Filled.Undo, "撤回", onRecall)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MessageActionButton(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    onClick: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 9.dp, vertical = 5.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Icon(
+            icon,
+            contentDescription = label,
+            tint = androidx.compose.ui.graphics.Color.White,
+            modifier = Modifier.size(20.dp),
+        )
+        Spacer(modifier = Modifier.height(3.dp))
+        Text(
+            label,
+            color = androidx.compose.ui.graphics.Color.White,
+            style = MaterialTheme.typography.labelSmall,
+            fontSize = 10.sp,
+        )
+    }
+}
+
+@Composable
+private fun QuoteContentPreview(content: String?) {
+    val segments = remember(content) { parseContentSegments(content) }
+    if (segments.isEmpty()) return
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        segments.take(3).forEach { segment ->
+            when (segment) {
+                is ContentSegment.Text -> Text(
+                    text = segment.text,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    lineHeight = 16.sp,
+                )
+                is ContentSegment.Image -> AsyncImage(
+                    model = ImageRequest.Builder(LocalContext.current)
+                        .data(segment.url)
+                        .crossfade(true)
+                        .build(),
+                    contentDescription = "引用图片",
+                    modifier = Modifier
+                        .size(width = 72.dp, height = 48.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(MaterialTheme.colorScheme.surfaceContainerHighest),
+                    contentScale = ContentScale.Crop,
+                )
+                is ContentSegment.Audio -> Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Filled.GraphicEq, contentDescription = null, modifier = Modifier.size(14.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("[语音]", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                is ContentSegment.Video -> Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Filled.PlayCircle, contentDescription = null, modifier = Modifier.size(14.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("[视频]", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                is ContentSegment.File -> Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Filled.InsertDriveFile, contentDescription = null, modifier = Modifier.size(14.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("[文件] ${segment.name}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
         }
     }
 }
@@ -1322,6 +1690,14 @@ private fun ChatInputBar(
     onSend: () -> Unit,
     onPickImage: () -> Unit,
     onQuickPhrase: () -> Unit,
+    onMore: () -> Unit,
+    messageType: String,
+    keyboardConfig: KeyboardConfig?,
+    showMorePanel: Boolean,
+    onClearMarkdown: () -> Unit,
+    onClearButtons: () -> Unit,
+    onSelectMarkdown: () -> Unit,
+    onConfigButtons: () -> Unit,
     sendingState: SendingState,
     isUploading: Boolean,
 ) {
@@ -1362,6 +1738,34 @@ private fun ChatInputBar(
             color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
         )
 
+        if (messageType == "markdown" || keyboardConfig != null) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                if (messageType == "markdown") {
+                    AssistChip(
+                        onClick = onClearMarkdown,
+                        label = { Text("Markdown") },
+                        leadingIcon = { Icon(Icons.Filled.Code, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                        trailingIcon = { Icon(Icons.Filled.Close, contentDescription = "移除", modifier = Modifier.size(14.dp)) },
+                    )
+                }
+                if (keyboardConfig != null) {
+                    val count = keyboardConfig.rows.sumOf { it.buttons.size }
+                    AssistChip(
+                        onClick = onClearButtons,
+                        label = { Text("按钮 $count 个") },
+                        leadingIcon = { Icon(Icons.Filled.TouchApp, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                        trailingIcon = { Icon(Icons.Filled.Close, contentDescription = "移除", modifier = Modifier.size(14.dp)) },
+                    )
+                }
+            }
+        }
+
         Surface(
             color = MaterialTheme.colorScheme.surfaceContainerLow,
             modifier = Modifier.fillMaxWidth(),
@@ -1369,7 +1773,7 @@ private fun ChatInputBar(
             Row(
                 modifier = Modifier
                     .padding(horizontal = 8.dp, vertical = 6.dp)
-                    .navigationBarsPadding(),
+                    .then(if (showMorePanel) Modifier else Modifier.navigationBarsPadding().imePadding()),
                 verticalAlignment = Alignment.Bottom,
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
@@ -1443,6 +1847,19 @@ private fun ChatInputBar(
                 }
 
                 // 发送按钮
+                IconButton(
+                    onClick = onMore,
+                    modifier = Modifier.size(36.dp),
+                ) {
+                    Icon(
+                        if (showMorePanel) Icons.Filled.Close else Icons.Filled.Add,
+                        contentDescription = "更多",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
+
+                // 发送按钮
                 FilledIconButton(
                     onClick = onSend,
                     enabled = draft.isNotBlank() && sendingState !is SendingState.Sending,
@@ -1470,7 +1887,167 @@ private fun ChatInputBar(
                 }
             }
         }
+
+        if (showMorePanel) {
+            MoreOptionsPanel(
+                onSelectMarkdown = onSelectMarkdown,
+                onConfigButtons = onConfigButtons,
+            )
+        }
     }
+}
+
+@Composable
+private fun MoreOptionsPanel(
+    onSelectMarkdown: () -> Unit,
+    onConfigButtons: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(238.dp)
+            .navigationBarsPadding(),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+    ) {
+        Column {
+            HorizontalDivider(
+                thickness = 0.5.dp,
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f),
+            )
+            Row(
+                modifier = Modifier.padding(horizontal = 28.dp, vertical = 22.dp),
+                horizontalArrangement = Arrangement.spacedBy(30.dp),
+                verticalAlignment = Alignment.Top,
+            ) {
+                MoreOptionItem(Icons.Filled.Code, "MD", onSelectMarkdown)
+                MoreOptionItem(Icons.Filled.TouchApp, "按钮", onConfigButtons)
+            }
+        }
+    }
+}
+
+@Composable
+private fun MoreOptionItem(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    onClick: () -> Unit,
+) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Surface(
+            modifier = Modifier
+                .size(56.dp)
+                .clickable(onClick = onClick),
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surface,
+            shadowElevation = 0.5.dp,
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(icon, contentDescription = label, modifier = Modifier.size(27.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        Spacer(modifier = Modifier.height(7.dp))
+        Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+private fun ButtonConfigDialog(
+    initial: KeyboardConfig?,
+    onDismiss: () -> Unit,
+    onSave: (KeyboardConfig) -> Unit,
+) {
+    var label by remember { mutableStateOf("") }
+    var action by remember { mutableStateOf("link") }
+    var value by remember { mutableStateOf("") }
+    var primary by remember { mutableStateOf(false) }
+    var buttons by remember {
+        mutableStateOf(initial?.rows?.flatMap { it.buttons } ?: emptyList())
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("配置按钮") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedTextField(
+                    value = label,
+                    onValueChange = { label = it },
+                    label = { Text("按钮文字") },
+                    singleLine = true,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    FilterChip(selected = action == "link", onClick = { action = "link" }, label = { Text("链接") })
+                    FilterChip(selected = action == "command", onClick = { action = "command" }, label = { Text("指令") })
+                    FilterChip(selected = action == "callback", onClick = { action = "callback" }, label = { Text("回调") })
+                }
+                OutlinedTextField(
+                    value = value,
+                    onValueChange = { value = it },
+                    label = {
+                        Text(when (action) {
+                            "link" -> "链接 URL"
+                            "command" -> "指令文本"
+                            else -> "回调数据"
+                        })
+                    },
+                    singleLine = true,
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = primary, onCheckedChange = { primary = it })
+                    Text("主按钮样式")
+                    Spacer(modifier = Modifier.weight(1f))
+                    FilledTonalButton(
+                        onClick = {
+                            if (label.isNotBlank() && value.isNotBlank() && buttons.size < 10) {
+                                buttons = buttons + MessageButton(
+                                    label = label.trim(),
+                                    action = action,
+                                    url = if (action == "link") value.trim() else null,
+                                    command = if (action == "command") value.trim() else null,
+                                    data = if (action == "callback") value.trim() else null,
+                                    primary = primary,
+                                )
+                                label = ""
+                                value = ""
+                                primary = false
+                            }
+                        },
+                        enabled = label.isNotBlank() && value.isNotBlank() && buttons.size < 10,
+                    ) { Text("添加") }
+                }
+                if (buttons.isNotEmpty()) {
+                    Text("已添加", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        buttons.forEachIndexed { index, button ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text("${button.label} · ${when (button.action) { "link" -> "链接"; "command" -> "指令"; else -> "回调" }}", modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                IconButton(onClick = { buttons = buttons.filterIndexed { i, _ -> i != index } }, modifier = Modifier.size(28.dp)) {
+                                    Icon(Icons.Filled.Close, contentDescription = "删除", modifier = Modifier.size(16.dp))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    val rows = buttons.chunked(2).map { KeyboardRow(it) }
+                    onSave(KeyboardConfig(rows))
+                },
+                enabled = buttons.isNotEmpty(),
+            ) { Text("保存") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+    )
 }
 
 /**

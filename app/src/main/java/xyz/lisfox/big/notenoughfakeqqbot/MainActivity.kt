@@ -39,10 +39,11 @@ import java.net.URLEncoder
 class MainActivity : ComponentActivity() {
 
     // 通知点击传入的导航参数
-    private var pendingNavPlatform: String? = null
-    private var pendingNavSelfId: String? = null
-    private var pendingNavChannelId: String? = null
-    private var pendingNavChatType: String? = null
+    private var pendingNavPlatform by mutableStateOf<String?>(null)
+    private var pendingNavSelfId by mutableStateOf<String?>(null)
+    private var pendingNavChannelId by mutableStateOf<String?>(null)
+    private var pendingNavChatType by mutableStateOf<String?>(null)
+    private var pendingNavTitle by mutableStateOf<String?>(null)
 
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -75,11 +76,13 @@ class MainActivity : ComponentActivity() {
                     pendingNavSelfId = pendingNavSelfId,
                     pendingNavChannelId = pendingNavChannelId,
                     pendingNavChatType = pendingNavChatType,
+                    pendingNavTitle = pendingNavTitle,
                     onPendingNavConsumed = {
                         pendingNavPlatform = null
                         pendingNavSelfId = null
                         pendingNavChannelId = null
                         pendingNavChatType = null
+                        pendingNavTitle = null
                     },
                 )
             }
@@ -88,6 +91,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        setIntent(intent)
         handleNotificationIntent(intent)
     }
 
@@ -97,6 +101,7 @@ class MainActivity : ComponentActivity() {
             pendingNavSelfId = it.getStringExtra("navigate_selfId")
             pendingNavChannelId = it.getStringExtra("navigate_channelId")
             pendingNavChatType = it.getStringExtra("navigate_chatType")
+            pendingNavTitle = it.getStringExtra("navigate_title")
         }
     }
 
@@ -114,6 +119,7 @@ fun AppNavigation(
     pendingNavSelfId: String?,
     pendingNavChannelId: String?,
     pendingNavChatType: String?,
+    pendingNavTitle: String?,
     onPendingNavConsumed: () -> Unit,
 ) {
     val navController = rememberNavController()
@@ -126,9 +132,9 @@ fun AppNavigation(
     val startDestination = if (startFromLogin) "login" else "main"
 
     // 处理通知点击导航
-    LaunchedEffect(pendingNavPlatform, pendingNavChannelId) {
-        if (!pendingNavPlatform.isNullOrBlank() && !pendingNavChannelId.isNullOrBlank()) {
-            val title = shortId(pendingNavChannelId)
+    LaunchedEffect(pendingNavPlatform, pendingNavSelfId, pendingNavChannelId, pendingNavTitle) {
+        if (!pendingNavPlatform.isNullOrBlank() && !pendingNavSelfId.isNullOrBlank() && !pendingNavChannelId.isNullOrBlank()) {
+            val title = pendingNavTitle?.takeIf { it.isNotBlank() } ?: shortId(pendingNavChannelId)
             val encodedChannelId = URLEncoder.encode(pendingNavChannelId, "UTF-8")
             val encodedTitle = URLEncoder.encode(title, "UTF-8")
             val chatType = pendingNavChatType ?: "group"
@@ -161,9 +167,9 @@ fun AppNavigation(
         composable("main") {
             val tabNavController = rememberNavController()
 
-            // 离开聊天页时清除 activeChannelId
+            // 离开聊天页时清除活跃会话标记
             DisposableEffect(Unit) {
-                onDispose { NotificationHelper.activeChannelId = null }
+                onDispose { NotificationHelper.clearActiveConversation() }
             }
 
             Scaffold(
@@ -178,7 +184,7 @@ fun AppNavigation(
                     modifier = Modifier.padding(padding),
                 ) {
                     composable("conversations") {
-                        NotificationHelper.activeChannelId = null
+                        NotificationHelper.clearActiveConversation()
                         ConversationListScreen(
                             currentBot = currentBot,
                             onConversationClick = { conv ->
@@ -192,7 +198,7 @@ fun AppNavigation(
                         )
                     }
                     composable("contacts") {
-                        NotificationHelper.activeChannelId = null
+                        NotificationHelper.clearActiveConversation()
                         ContactsScreen(
                             currentBot = currentBot,
                             onContactClick = { conv ->
@@ -201,7 +207,7 @@ fun AppNavigation(
                         )
                     }
                     composable("profile") {
-                        NotificationHelper.activeChannelId = null
+                        NotificationHelper.clearActiveConversation()
                         SettingsScreen(
                             currentBot = currentBot,
                             bots = bots,
@@ -237,9 +243,9 @@ fun AppNavigation(
             val title = URLDecoder.decode(backStackEntry.arguments?.getString("title") ?: "", "UTF-8")
 
             // 设置当前活跃频道（抑制通知）
-            DisposableEffect(channelId) {
-                NotificationHelper.activeChannelId = channelId
-                onDispose { NotificationHelper.activeChannelId = null }
+            DisposableEffect(platform, selfId, channelId) {
+                NotificationHelper.setActiveConversation(platform, selfId, channelId)
+                onDispose { NotificationHelper.clearActiveConversation() }
             }
 
             ChatScreen(

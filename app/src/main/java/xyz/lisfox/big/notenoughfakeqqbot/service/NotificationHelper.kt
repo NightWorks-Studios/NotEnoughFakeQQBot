@@ -25,9 +25,17 @@ class NotificationHelper(private val context: Context) {
         private const val SUMMARY_ID = 2000
         private var nextNotificationId = 2001
 
-        // 当前正在查看的频道（不弹通知）
+        // 当前正在查看的会话（不弹通知）
         @Volatile
-        var activeChannelId: String? = null
+        private var activeConversationKey: String? = null
+
+        fun setActiveConversation(platform: String, selfId: String, channelId: String) {
+            activeConversationKey = "$platform:$selfId:$channelId"
+        }
+
+        fun clearActiveConversation() {
+            activeConversationKey = null
+        }
     }
 
     private val notificationManager = context.getSystemService(NotificationManager::class.java)
@@ -35,9 +43,11 @@ class NotificationHelper(private val context: Context) {
     /**
      * 显示新消息通知
      */
-    fun showMessageNotification(msg: MessageEntity, channelDisplayName: String? = null) {
-        // 如果用户正在查看这个频道，不弹通知
-        if (msg.channelId == activeChannelId) return
+    fun showMessageNotification(msg: MessageEntity, channelDisplayName: String? = null, muted: Boolean = false) {
+        // 机器人自己发送的消息、本会话免打扰、用户正在查看的会话，都不弹系统通知。
+        if (msg.userId == msg.selfId) return
+        if (muted) return
+        if (activeConversationKey == "${msg.platform}:${msg.selfId}:${msg.channelId}") return
 
         // 检查通知权限
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -58,6 +68,7 @@ class NotificationHelper(private val context: Context) {
             putExtra("navigate_selfId", msg.selfId)
             putExtra("navigate_channelId", msg.channelId)
             putExtra("navigate_chatType", msg.chatType ?: "group")
+            putExtra("navigate_title", channelTitle)
         }
 
         val pendingIntent = PendingIntent.getActivity(

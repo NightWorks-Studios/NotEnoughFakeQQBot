@@ -10,6 +10,7 @@ import okhttp3.MultipartBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import xyz.lisfox.big.notenoughfakeqqbot.App
 import xyz.lisfox.big.notenoughfakeqqbot.data.model.MessageEntity
+import xyz.lisfox.big.notenoughfakeqqbot.data.model.KeyboardConfig
 import xyz.lisfox.big.notenoughfakeqqbot.data.model.SendTextResult
 
 data class ChatUiState(
@@ -103,12 +104,15 @@ class ChatViewModel : ViewModel() {
         }
     }
 
-    fun sendMessage(content: String) {
+    fun sendMessage(content: String, messageType: String = "text", keyboard: KeyboardConfig? = null) {
         if (content.isBlank()) return
         viewModelScope.launch {
             _uiState.update { it.copy(sendingState = SendingState.Sending) }
             try {
-                val result = repo.sendText(platform, selfId, channelId, content, chatType)
+                if (keyboard != null && messageType != "markdown") {
+                    throw Exception("仅 Markdown 消息支持按钮")
+                }
+                val result = repo.sendText(platform, selfId, channelId, content, chatType, messageType, keyboard)
                 _uiState.update { it.copy(sendingState = SendingState.Success(result)) }
                 // 同步最新消息
                 repo.syncAll(platform, selfId)
@@ -125,6 +129,16 @@ class ChatViewModel : ViewModel() {
     fun markRead() {
         viewModelScope.launch {
             repo.markConversationRead(platform, selfId, channelId)
+        }
+    }
+
+    fun recallMessage(message: MessageEntity) {
+        viewModelScope.launch {
+            try {
+                repo.recallMessage(message)
+            } catch (e: Exception) {
+                _uiState.update { it.copy(sendingState = SendingState.Error("撤回失败: ${e.message}")) }
+            }
         }
     }
 

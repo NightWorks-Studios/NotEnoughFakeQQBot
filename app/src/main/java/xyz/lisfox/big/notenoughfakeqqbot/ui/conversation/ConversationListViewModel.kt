@@ -37,6 +37,12 @@ class ConversationListViewModel : ViewModel() {
         }
     }
 
+    fun muteConversation(conv: ConversationEntity, muted: Boolean) {
+        viewModelScope.launch {
+            repo.muteConversation(conv.platform, conv.selfId, conv.channelId, muted)
+        }
+    }
+
     fun deleteConversation(conv: ConversationEntity) {
         viewModelScope.launch {
             repo.deleteConversation(conv.platform, conv.selfId, conv.channelId)

@@ -39,6 +39,42 @@ data class SendTextRequest(
     val content: String,
     val chatType: String? = null,
     val guildId: String? = null,
+    val messageType: String = "text",
+    val keyboard: KeyboardConfig? = null,
+)
+
+@Serializable
+data class KeyboardConfig(
+    val rows: List<KeyboardRow>,
+)
+
+@Serializable
+data class KeyboardRow(
+    val buttons: List<MessageButton>,
+)
+
+@Serializable
+data class MessageButton(
+    val label: String,
+    val action: String, // "link" | "command" | "callback"
+    val url: String? = null,
+    val command: String? = null,
+    val data: String? = null,
+    val primary: Boolean = false,
+)
+
+@Serializable
+data class RecallMessageRequest(
+    val chatType: String? = null,
+)
+
+@Serializable
+data class RecallMessageResult(
+    val id: Int,
+    val messageId: String? = null,
+    val recalled: Boolean = true,
+    val recalledAt: Long,
+    val recalledBy: String? = null,
 )
 
 /**

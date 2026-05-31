@@ -16,7 +16,7 @@ import xyz.lisfox.big.notenoughfakeqqbot.data.model.SyncState
         ConversationEntity::class,
         SyncState::class,
     ],
-    version = 1,
+    version = 4,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {

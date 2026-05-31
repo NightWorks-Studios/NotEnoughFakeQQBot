@@ -4,6 +4,7 @@ import android.util.Log
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.serialization.json.*
+import retrofit2.HttpException
 import xyz.lisfox.big.notenoughfakeqqbot.data.api.ApiClient
 import xyz.lisfox.big.notenoughfakeqqbot.data.cache.ImageCacheManager
 import xyz.lisfox.big.notenoughfakeqqbot.data.db.AppDatabase
@@ -35,6 +36,7 @@ class MessageRepository(
             wsManager.events.collect { event ->
                 when (event) {
                     is WsEvent.NewMessage -> handleNewMessage(event.data)
+                    is WsEvent.MessageRecalled -> handleMessageRecalled(event)
                     is WsEvent.ChannelUpdate -> handleChannelUpdate(event)
                     is WsEvent.BotStatus -> { /* handled by ViewModel */ }
                 }
@@ -117,10 +119,45 @@ class MessageRepository(
     /**
      * 发送文本消息
      */
-    suspend fun sendText(platform: String, selfId: String, channelId: String, content: String, chatType: String?): SendTextResult {
-        val result = ApiClient.api.sendText(platform, selfId, channelId, SendTextRequest(content, chatType))
+    suspend fun sendText(
+        platform: String,
+        selfId: String,
+        channelId: String,
+        content: String,
+        chatType: String?,
+        messageType: String = "text",
+        keyboard: KeyboardConfig? = null,
+    ): SendTextResult {
+        val result = ApiClient.api.sendText(platform, selfId, channelId, SendTextRequest(content, chatType, messageType = messageType, keyboard = keyboard))
         if (result.code != 0) throw Exception(result.message)
         return result.data ?: throw Exception("empty response")
+    }
+
+    suspend fun recallMessage(message: MessageEntity) {
+        try {
+            val response = ApiClient.api.recallMessage(
+                message.platform,
+                message.selfId,
+                message.channelId,
+                message.id,
+                RecallMessageRequest(message.chatType),
+            )
+            if (response.code != 0) throw Exception(response.message)
+            val result = response.data ?: throw Exception("empty response")
+            markMessageRecalled(message.id, result.recalledAt, result.recalledBy)
+        } catch (e: HttpException) {
+            throw Exception(parseHttpErrorMessage(e) ?: "HTTP ${e.code()} ${e.message()}")
+        }
+    }
+
+    private fun parseHttpErrorMessage(error: HttpException): String? {
+        return try {
+            val body = error.response()?.errorBody()?.string() ?: return null
+            val obj = json.parseToJsonElement(body).jsonObject
+            obj["message"]?.jsonPrimitive?.contentOrNull
+        } catch (_: Exception) {
+            null
+        }
     }
 
     /**
@@ -158,6 +195,7 @@ class MessageRepository(
                     unreadCount = old?.unreadCount ?: 0,
                     lastReadAt = old?.lastReadAt ?: 0,
                     pinned = old?.pinned ?: false,
+                    muted = old?.muted ?: false,
                     canProactive = ch.canProactive,
                     avatar = old?.avatar,
                 )
@@ -188,6 +226,10 @@ class MessageRepository(
         conversationDao.setPinned(platform, selfId, channelId, pinned)
     }
 
+    suspend fun muteConversation(platform: String, selfId: String, channelId: String, muted: Boolean) {
+        conversationDao.setMuted(platform, selfId, channelId, muted)
+    }
+
     suspend fun deleteConversation(platform: String, selfId: String, channelId: String) {
         conversationDao.delete(platform, selfId, channelId)
     }
@@ -213,7 +255,7 @@ class MessageRepository(
 
             // 弹出通知
             val existing = conversationDao.getConversation(msg.platform, msg.selfId, msg.channelId)
-            notificationHelper.showMessageNotification(msg, existing?.displayName)
+            notificationHelper.showMessageNotification(msg, existing?.displayName, muted = existing?.muted == true)
 
             // 更新会话
             if (existing != null) {
@@ -249,6 +291,29 @@ class MessageRepository(
                 channelId = event.channelId,
                 chatType = event.chatType,
             ))
+        }
+    }
+
+    private suspend fun handleMessageRecalled(event: WsEvent.MessageRecalled) {
+        if (event.id <= 0) return
+        markMessageRecalled(event.id, event.recalledAt, event.recalledBy)
+    }
+
+    private suspend fun markMessageRecalled(id: Int, recalledAt: Long, recalledBy: String?) {
+        val msg = messageDao.getById(id)
+        messageDao.markRecalled(id, recalledAt, recalledBy)
+        if (msg != null) {
+            val latest = messageDao.getMessages(msg.platform, msg.selfId, msg.channelId, 1).firstOrNull()
+            if (latest?.id == id) {
+                val existing = conversationDao.getConversation(msg.platform, msg.selfId, msg.channelId)
+                if (existing != null) {
+                    conversationDao.insert(existing.copy(
+                        lastMessage = "消息已撤回",
+                        lastMessageAt = msg.receivedAt,
+                        lastNickname = msg.nickname,
+                    ))
+                }
+            }
         }
     }
 

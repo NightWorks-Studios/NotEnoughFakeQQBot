@@ -16,6 +16,14 @@ enum class WsConnectionState {
 
 sealed class WsEvent {
     data class NewMessage(val data: JsonObject) : WsEvent()
+    data class MessageRecalled(
+        val platform: String,
+        val selfId: String,
+        val channelId: String,
+        val id: Int,
+        val recalledAt: Long,
+        val recalledBy: String?,
+    ) : WsEvent()
     data class BotStatus(val platform: String, val selfId: String, val status: String) : WsEvent()
     data class ChannelUpdate(val platform: String, val selfId: String, val channelId: String, val chatType: String) : WsEvent()
 }
@@ -71,11 +79,16 @@ class WebSocketManager {
 
         val wsUrl = serverUrl
             .replace("http://", "ws://")
-            .replace("https://", "wss://") + "/ws?token=$token"
+            .replace("https://", "wss://") + "/ws"
 
         Log.i(TAG, "Connecting to: $wsUrl")
 
-        val request = Request.Builder().url(wsUrl).build()
+        val request = Request.Builder()
+            .url(wsUrl)
+            .apply {
+                if (token.isNotBlank()) header("Authorization", "Bearer $token")
+            }
+            .build()
 
         ws = client!!.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
@@ -127,6 +140,18 @@ class WebSocketManager {
                             platform = data["platform"]?.jsonPrimitive?.contentOrNull ?: "",
                             selfId = data["selfId"]?.jsonPrimitive?.contentOrNull ?: "",
                             status = data["status"]?.jsonPrimitive?.contentOrNull ?: "",
+                        ))
+                    }
+                }
+                "message-recalled" -> {
+                    if (data != null) {
+                        _events.tryEmit(WsEvent.MessageRecalled(
+                            platform = data["platform"]?.jsonPrimitive?.contentOrNull ?: "",
+                            selfId = data["selfId"]?.jsonPrimitive?.contentOrNull ?: "",
+                            channelId = data["channelId"]?.jsonPrimitive?.contentOrNull ?: "",
+                            id = data["id"]?.jsonPrimitive?.intOrNull ?: 0,
+                            recalledAt = data["recalledAt"]?.jsonPrimitive?.longOrNull ?: System.currentTimeMillis(),
+                            recalledBy = data["recalledBy"]?.jsonPrimitive?.contentOrNull,
                         ))
                     }
                 }

@@ -2,8 +2,10 @@ package xyz.lisfox.big.notenoughfakeqqbot.data.model
 
 import androidx.room.Entity
 import androidx.room.Fts4
+import androidx.room.ColumnInfo
 import androidx.room.PrimaryKey
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerialName
 
 /**
  * 服务端返回的消息结构，也是 Room 本地存储的主表
@@ -26,9 +28,17 @@ data class MessageEntity(
     val quoteContent: String? = null,
     val messageId: String,
     val content: String? = null,
+    val messageType: String? = null,
+    @SerialName("keyboard")
+    @ColumnInfo(name = "keyboard")
+    val keyboardJson: String? = null,
     val timestamp: Long,
     val receivedAt: Long,
     val raw: String? = null,
+    val recalled: Boolean = false,
+    val recalledAt: Long? = null,
+    val recalledBy: String? = null,
+    val updatedAt: Long? = null,
 )
 
 /**

@@ -20,6 +20,7 @@ data class ConversationEntity(
     val unreadCount: Int = 0,
     val lastReadAt: Long = 0,
     val pinned: Boolean = false,
+    val muted: Boolean = false,
     val canProactive: Boolean = false,
     val avatar: String? = null,
 )

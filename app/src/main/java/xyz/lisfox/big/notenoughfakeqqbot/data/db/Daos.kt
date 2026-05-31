@@ -17,6 +17,9 @@ interface MessageDao {
     @Query("SELECT * FROM messages WHERE platform = :platform AND selfId = :selfId AND channelId = :channelId ORDER BY receivedAt DESC LIMIT :limit")
     suspend fun getMessages(platform: String, selfId: String, channelId: String, limit: Int = 50): List<MessageEntity>
 
+    @Query("SELECT * FROM messages WHERE id = :id")
+    suspend fun getById(id: Int): MessageEntity?
+
     @Query("SELECT * FROM messages WHERE platform = :platform AND selfId = :selfId AND channelId = :channelId ORDER BY receivedAt DESC LIMIT :limit OFFSET :offset")
     suspend fun getMessagesPaged(platform: String, selfId: String, channelId: String, limit: Int, offset: Int): List<MessageEntity>
 
@@ -38,6 +41,9 @@ interface MessageDao {
     @Query("DELETE FROM messages WHERE platform = :platform AND selfId = :selfId AND channelId = :channelId")
     suspend fun deleteByChannel(platform: String, selfId: String, channelId: String)
 
+    @Query("UPDATE messages SET recalled = 1, recalledAt = :recalledAt, recalledBy = :recalledBy WHERE id = :id")
+    suspend fun markRecalled(id: Int, recalledAt: Long, recalledBy: String?)
+
     @Query("DELETE FROM messages")
     suspend fun deleteAll()
 
@@ -45,10 +51,10 @@ interface MessageDao {
     suspend fun count(): Int
 
     // FTS 搜索
-    @Query("SELECT messages.* FROM messages JOIN messages_fts ON messages.rowid = messages_fts.rowid WHERE messages_fts MATCH :query ORDER BY messages.receivedAt DESC LIMIT :limit")
+    @Query("SELECT messages.* FROM messages JOIN messages_fts ON messages.rowid = messages_fts.rowid WHERE messages_fts MATCH :query AND messages.recalled = 0 ORDER BY messages.receivedAt DESC LIMIT :limit")
     suspend fun search(query: String, limit: Int = 100): List<MessageEntity>
 
-    @Query("SELECT messages.* FROM messages JOIN messages_fts ON messages.rowid = messages_fts.rowid WHERE messages_fts MATCH :query AND messages.platform = :platform AND messages.selfId = :selfId ORDER BY messages.receivedAt DESC LIMIT :limit")
+    @Query("SELECT messages.* FROM messages JOIN messages_fts ON messages.rowid = messages_fts.rowid WHERE messages_fts MATCH :query AND messages.platform = :platform AND messages.selfId = :selfId AND messages.recalled = 0 ORDER BY messages.receivedAt DESC LIMIT :limit")
     suspend fun searchInBot(query: String, platform: String, selfId: String, limit: Int = 100): List<MessageEntity>
 }
 
@@ -77,6 +83,9 @@ interface ConversationDao {
 
     @Query("UPDATE conversations SET pinned = :pinned WHERE platform = :platform AND selfId = :selfId AND channelId = :channelId")
     suspend fun setPinned(platform: String, selfId: String, channelId: String, pinned: Boolean)
+
+    @Query("UPDATE conversations SET muted = :muted WHERE platform = :platform AND selfId = :selfId AND channelId = :channelId")
+    suspend fun setMuted(platform: String, selfId: String, channelId: String, muted: Boolean)
 
     @Query("UPDATE conversations SET displayName = :displayName WHERE platform = :platform AND selfId = :selfId AND channelId = :channelId")
     suspend fun setDisplayName(platform: String, selfId: String, channelId: String, displayName: String?)

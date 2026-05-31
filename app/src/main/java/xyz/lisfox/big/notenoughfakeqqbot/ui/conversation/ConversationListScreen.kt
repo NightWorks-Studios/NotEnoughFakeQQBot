@@ -13,6 +13,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Group
+import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Search
@@ -55,6 +56,7 @@ fun ConversationListScreen(
     // 编辑昵称对话框状态
     var editingConversation by remember { mutableStateOf<ConversationEntity?>(null) }
     var editNickname by remember { mutableStateOf("") }
+    var editMuted by remember { mutableStateOf(false) }
 
     Column(modifier = Modifier.fillMaxSize()) {
         // 顶部搜索栏
@@ -118,6 +120,7 @@ fun ConversationListScreen(
                             onLongClick = {
                                 editingConversation = conv
                                 editNickname = conv.displayName ?: ""
+                                editMuted = conv.muted
                             },
                             onPin = { viewModel.pinConversation(conv, !conv.pinned) },
                             onDelete = { viewModel.deleteConversation(conv) },
@@ -132,7 +135,7 @@ fun ConversationListScreen(
     if (editingConversation != null) {
         AlertDialog(
             onDismissRequest = { editingConversation = null },
-            title = { Text("设置备注名") },
+            title = { Text("会话设置") },
             text = {
                 Column {
                     Text(
@@ -150,12 +153,35 @@ fun ConversationListScreen(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(12.dp),
                     )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            Icons.Filled.NotificationsOff,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(20.dp),
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("免打扰", style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                "继续收消息，但不推送系统通知",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Switch(checked = editMuted, onCheckedChange = { editMuted = it })
+                    }
                 }
             },
             confirmButton = {
                 TextButton(onClick = {
                     val conv = editingConversation!!
                     viewModel.setDisplayName(conv, editNickname.trim().ifBlank { null })
+                    viewModel.muteConversation(conv, editMuted)
                     editingConversation = null
                 }) { Text("保存") }
             },
@@ -290,6 +316,15 @@ private fun ConversationItem(
                             modifier = Modifier.weight(1f),
                         )
                         Spacer(modifier = Modifier.width(8.dp))
+                        if (conversation.muted) {
+                            Icon(
+                                Icons.Filled.NotificationsOff,
+                                contentDescription = "免打扰",
+                                modifier = Modifier.size(15.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                        }
                         Text(
                             text = formatConversationTime(conversation.lastMessageAt),
                             style = MaterialTheme.typography.labelSmall,

@@ -45,6 +45,15 @@ interface FakeQqBotApi {
         @Body body: SendTextRequest,
     ): ApiResponse<SendTextResult>
 
+    @POST("bots/{platform}/{selfId}/channels/{channelId}/messages/{id}/recall")
+    suspend fun recallMessage(
+        @Path("platform") platform: String,
+        @Path("selfId") selfId: String,
+        @Path("channelId") channelId: String,
+        @Path("id") id: Int,
+        @Body body: RecallMessageRequest,
+    ): ApiResponse<RecallMessageResult>
+
     @DELETE("bots/{platform}/{selfId}/channels/{channelId}/messages")
     suspend fun deleteMessages(
         @Path("platform") platform: String,

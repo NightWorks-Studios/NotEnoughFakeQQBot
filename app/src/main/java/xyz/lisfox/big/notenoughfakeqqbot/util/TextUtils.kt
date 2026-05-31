@@ -26,18 +26,18 @@ private fun decodeEntities(input: String): String {
 }
 
 /**
- * 处理 <at> 标签，提取 name 属性优先，否则用 id
+ * 处理 <at> / <qqbot-at-user> 标签，提取 name 属性优先，否则用 id
  */
 private fun processAtTags(input: String): String {
-    return Regex("""<at\b([^>]*)/?>(?:</at>)?""", RegexOption.IGNORE_CASE)
+    return Regex("""<(?:at|qqbot-at-user)\b([^>]*)/?>(?:</(?:at|qqbot-at-user)>)?""", RegexOption.IGNORE_CASE)
         .replace(input) { match ->
             val attrs = match.groupValues[1]
             val nameMatch = Regex("""\bname\s*=\s*['"]([^'"]*?)['"]""", RegexOption.IGNORE_CASE).find(attrs)
             val name = nameMatch?.groupValues?.get(1)?.takeIf { it.isNotBlank() }
             if (name != null) return@replace "@$name"
             val idMatch = Regex("""\bid\s*=\s*['"]([^'"]*?)['"]""", RegexOption.IGNORE_CASE).find(attrs)
-            val id = idMatch?.groupValues?.get(1)?.takeIf { it.isNotBlank() } ?: ""
-            "@$id"
+            val id = idMatch?.groupValues?.get(1)?.takeIf { it.isNotBlank() }
+            if (id != null) "@$id" else "@用户"
         }
 }
 
